@@ -11,11 +11,12 @@
     .card{padding:16px;border:1px solid #ddd;border-radius:12px;}
     h2{margin:.2em 0}
     .code{font-family:ui-monospace,Menlo,Consolas,monospace}
+    .muted{color:#666;font-size:.9em}
   </style>
 </head>
 <body>
   <h1>Site Eval Dashboard (PoC)</h1>
-  <div id="meta" class="card"></div>
+  <div id="meta" class="card">Loading…</div>
   <div class="wrap">
     <div class="card"><h2>Tier1（三角値）</h2><div id="t1"></div></div>
     <div class="card"><h2>Tier2（レーダー）</h2><canvas id="radar" height="280"></canvas></div>
@@ -23,41 +24,99 @@
 
   <script>
   (async function(){
-    const API = 'https://script.google.com/macros/s/AKfycbxdPG2-0kLYhEqvKSMngbBD8d-KyAylhvFdxtZD2Mez-dUQbJHmnS_GSwdUTrIfa9FMug/exec?latest=1'; // 例：&engine=codex&token=XXXX
-    const res = await fetch(API); const data = await res.json();
+    const API = 'https://script.google.com/macros/s/AKfycbyo8iTPtCLE2T20QayS5Ja_wOCxlhlkj5qGQnUKvvF7TVJvhjfXqFePUvoFftgjulqaPA/exec?latest=1';
+    const elMeta = document.getElementById('meta');
+    const elT1   = document.getElementById('t1');
+    const radarCtx = document.getElementById('radar').getContext('2d');
 
-    // Meta
-    const meta = document.getElementById('meta');
-    meta.innerHTML = `
-      <h2>対象</h2>
-      <div>URL: <a href="${data.run.target_url}" target="_blank" rel="noreferrer">${data.run.target_url}</a></div>
-      <div>Run: <span class="code">${data.run.run_id}</span> / Engine: ${data.run.engine_label}</div>
-      <div>SiteType: <span class="code">${data.site_type?.code||'-'}</span>
-        （W/C=${data.site_type?.W_C?.pole||'-'} / B/S=${data.site_type?.B_S?.pole||'-'} /
-         F/L=${data.site_type?.F_L?.pole||'-'} / H/T=${data.site_type?.H_T?.pole||'-'}）</div>
-      <div>Evaluated: ${data.meta.evaluated_at||'-'}</div>
-    `;
+    try {
+      const res = await fetch(API, { method: 'GET' });
+      const payload = await res.json();             // { ok, source, data }
+      if (!payload.ok) throw new Error(payload.error || 'API error');
+      const data = payload.data || {};              // scores_flat JSON 本体
 
-    // Tier1表示（数値）
-    const t1 = (data.tier1||[]).reduce((m,x)=>{ m[x.name]=x.normalized_100; return m; },{});
-    document.getElementById('t1').innerHTML =
-      Object.entries(t1).map(([k,v])=>`${k}: <b>${v??'-'}</b>`).join(' / ');
+      // ラン・評価日時のゆらぎ吸収
+      const run = data.run || {};
+      const evaluatedAt = (run.evaluated_at) || (data.meta && data.meta.evaluated_at) || '-';
+      const targetUrl   = run.target_url || (data.metadata && data.metadata.target_url) || '-';
+      const engine      = run.engine_label || (data.metadata && data.metadata.engine_label) || '-';
+      const runId       = run.run_id || (data.metadata && data.metadata.run_id) || '-';
 
-    // レーダー（Tier2 normalized_100）
-    const t2 = (data.tier2||[]).filter(x=> typeof x.normalized_100==='number');
-    const ctx = document.getElementById('radar').getContext('2d');
-    new Chart(ctx, {
-      type:'radar',
-      data:{
-        labels: t2.map(d=>d.name),
-        datasets:[{ label:'Tier2', data: t2.map(d=>d.normalized_100) }]
-      },
-      options:{
-        responsive:true,
-        scales:{ r:{ suggestedMin:0, suggestedMax:100, ticks:{ stepSize:20 } } },
-        plugins:{ legend:{ display:false } }
+      // Site Type（オプション）
+      const st = data.site_type || {};
+      const code = st.code || '-';
+      const wc = (st.W_C && st.W_C.pole) || '-';
+      const bs = (st.B_S && st.B_S.pole) || '-';
+      const fl = (st.F_L && st.F_L.pole) || '-';
+      const ht = (st.H_T && st.H_T.pole) || '-';
+
+      // Meta表示
+      elMeta.innerHTML = `
+        <h2>対象</h2>
+        <div>URL: ${
+          targetUrl && targetUrl !== '-' ? `<a href="${targetUrl}" target="_blank" rel="noreferrer">${targetUrl}</a>` : '-'
+        }</div>
+        <div>Run: <span class="code">${runId}</span> / Engine: ${engine}</div>
+        <div>SiteType: <span class="code">${code}</span>
+          <span class="muted">（W/C=${wc} / B/S=${bs} / F/L=${fl} / H/T=${ht}）</span></div>
+        <div>Evaluated: ${evaluatedAt}</div>
+        <div class="muted">Source: ${payload.source ? payload.source.file_name : '-'}</div>
+      `;
+
+      // Tier1（Warmth/Competence/Momentum）
+      const t1arr = Array.isArray(data.tier1) ? data.tier1 : [];
+      // normalized_100 または normalized を優先的に使う
+      const t1map = t1arr.reduce((m,x)=>{
+        const v = typeof x.normalized_100 === 'number' ? x.normalized_100
+                : typeof x.normalized      === 'number' ? Math.round(x.normalized)
+                : typeof x.score            === 'number' ? Math.round(x.score*20) // 0-5→0-100
+                : null;
+        m[x.name] = v;
+        return m;
+      }, {});
+      const t1html = Object.entries(t1map).length
+        ? Object.entries(t1map).map(([k,v])=>`${k}: <b>${v ?? '-'}</b>`).join(' / ')
+        : '<span class="muted">No Tier1 data</span>';
+      elT1.innerHTML = t1html;
+
+      // Tier2 レーダー
+      const t2arr = (Array.isArray(data.tier2) ? data.tier2 : [])
+        .map(d => ({
+          name: d.name,
+          value: (typeof d.normalized_100 === 'number') ? d.normalized_100
+               : (typeof d.normalized      === 'number') ? Math.round(d.normalized)
+               : (typeof d.score            === 'number') ? Math.round(d.score*20)
+               : null
+        }))
+        .filter(d => typeof d.value === 'number');
+
+      if (!t2arr.length) {
+        // データ無しの場合は空チャートを抑止
+        document.getElementById('radar').replaceWith((() => {
+          const div = document.createElement('div');
+          div.className = 'muted';
+          div.textContent = 'No Tier2 data';
+          return div;
+        })());
+      } else {
+        new Chart(radarCtx, {
+          type:'radar',
+          data:{
+            labels: t2arr.map(d=>d.name),
+            datasets:[{ label:'Tier2', data: t2arr.map(d=>d.value) }]
+          },
+          options:{
+            responsive:true,
+            scales:{ r:{ suggestedMin:0, suggestedMax:100, ticks:{ stepSize:20 } } },
+            plugins:{ legend:{ display:false } }
+          }
+        });
       }
-    });
+    } catch (err) {
+      console.error(err);
+      document.getElementById('meta').innerHTML =
+        `<b style="color:#c00">Error:</b> ${String(err && err.message || err)}`;
+    }
   })();
   </script>
 </body>
