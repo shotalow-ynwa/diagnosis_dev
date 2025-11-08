@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Personality Diagnosis for Websites</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', Meiryo, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        
+        header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 60px 40px;
+            text-align: center;
+        }
+        
+        header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            font-weight: 700;
+        }
+        
+        header p {
+            font-size: 1.2em;
+            opacity: 0.9;
+        }
+        
+        .content {
+            padding: 40px;
+        }
+        
+        .section {
+            margin-bottom: 40px;
+        }
+        
+        .section h2 {
+            color: #667eea;
+            font-size: 1.8em;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 3px solid #667eea;
+        }
+        
+        .section p {
+            margin-bottom: 15px;
+            font-size: 1.1em;
+        }
+        
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-top: 30px;
+        }
+        
+        .feature-card {
+            background: #f8f9fa;
+            padding: 25px;
+            border-radius: 10px;
+            border-left: 4px solid #667eea;
+            transition: transform 0.3s ease;
+        }
+        
+        .feature-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+        
+        .feature-card h3 {
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+        
+        footer {
+            background: #2c3e50;
+            color: white;
+            text-align: center;
+            padding: 30px;
+        }
+        
+        .btn {
+            display: inline-block;
+            padding: 12px 30px;
+            background: #667eea;
+            color: white;
+            text-decoration: none;
+            border-radius: 25px;
+            margin-top: 20px;
+            transition: background 0.3s ease;
+        }
+        
+        .btn:hover {
+            background: #764ba2;
+        }
+        
+        @media (max-width: 768px) {
+            header h1 {
+                font-size: 2em;
+            }
+            
+            .content {
+                padding: 20px;
+            }
+            
+            .features {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Personality Diagnosis for Websites</h1>
+            <p>Webサイトのパーソナリティ診断システム</p>
+        </header>
+        
+        <div class="content">
+            <section class="section">
+                <h2>プロジェクト概要</h2>
+                <p>
+                    このプロジェクトは、Webサイトの初期印象を評価し、そのパーソナリティを診断するためのシステムです。
+                    PMBOK × Lean UX × Agileの手法を融合したプロジェクト管理フレームワークを活用して開発されています。
+                </p>
+            </section>
+            
+            <section class="section">
+                <h2>主な機能</h2>
+                <div class="features">
+                    <div class="feature-card">
+                        <h3>初期印象評価</h3>
+                        <p>Webサイトの視覚的な第一印象を多角的に評価します。</p>
+                    </div>
+                    <div class="feature-card">
+                        <h3>パーソナリティ診断</h3>
+                        <p>評価結果からWebサイトのパーソナリティ特性を分析します。</p>
+                    </div>
+                    <div class="feature-card">
+                        <h3>指標データベース</h3>
+                        <p>学術研究に基づいた評価指標を体系的に管理します。</p>
+                    </div>
+                </div>
+            </section>
+            
+            <section class="section">
+                <h2>システム構成</h2>
+                <p>
+                    このシステムは以下のディレクトリ構造で管理されています：
+                </p>
+                <ul style="margin-left: 30px; margin-top: 15px;">
+                    <li><strong>Flow/</strong> - ドラフト文書と作業中のファイル</li>
+                    <li><strong>Stock/</strong> - 確定済みの公式ドキュメント</li>
+                    <li><strong>scripts/</strong> - 自動化スクリプト</li>
+                </ul>
+            </section>
+            
+            <section class="section">
+                <h2>リポジトリ情報</h2>
+                <p>
+                    <strong>GitHub:</strong> 
+                    <a href="https://github.com/shotalow-ynwa/personality_diagnosis_for_websites" target="_blank" style="color: #667eea;">
+                        shotalow-ynwa/personality_diagnosis_for_websites
+                    </a>
+                </p>
+            </section>
+        </div>
+        
+        <footer>
+            <p>&copy; 2025 Personality Diagnosis for Websites</p>
+        </footer>
+    </div>
+</body>
+</html>
+
