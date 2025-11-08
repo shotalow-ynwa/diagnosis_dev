@@ -22,102 +22,137 @@
     <div class="card"><h2>Tier2（レーダー）</h2><canvas id="radar" height="280"></canvas></div>
   </div>
 
-  <script>
-  (async function(){
-    const API = 'https://script.google.com/macros/s/AKfycbyo8iTPtCLE2T20QayS5Ja_wOCxlhlkj5qGQnUKvvF7TVJvhjfXqFePUvoFftgjulqaPA/exec?latest=1';
-    const elMeta = document.getElementById('meta');
-    const elT1   = document.getElementById('t1');
-    const radarCtx = document.getElementById('radar').getContext('2d');
+<script>
+(async function () {
+  // ★あなたのWeb App URLに置き換え
+  const API = 'https://script.google.com/macros/s/AKfycbyo8iTPtCLE2T20QayS5Ja_wOCxlhlkj5qGQnUKvvF7TVJvhjfXqFePUvoFftgjulqaPA/exec?latest=1';
 
-    try {
-      const res = await fetch(API, { method: 'GET' });
-      const payload = await res.json();             // { ok, source, data }
-      if (!payload.ok) throw new Error(payload.error || 'API error');
-      const data = payload.data || {};              // scores_flat JSON 本体
+  // -------- Fetch & Normalize --------
+  const resp = await fetch(API);
+  const payload = await resp.json();
+  if (!payload.ok) throw new Error(payload.error || 'API error');
+  const raw = payload.data;
 
-      // ラン・評価日時のゆらぎ吸収
-      const run = data.run || {};
-      const evaluatedAt = (run.evaluated_at) || (data.meta && data.meta.evaluated_at) || '-';
-      const targetUrl   = run.target_url || (data.metadata && data.metadata.target_url) || '-';
-      const engine      = run.engine_label || (data.metadata && data.metadata.engine_label) || '-';
-      const runId       = run.run_id || (data.metadata && data.metadata.run_id) || '-';
+  // フラット(socres_flat) or ネスト(scores) をユニファイ
+  const model = Array.isArray(raw) ? fromFlat(raw) : fromNested(raw);
 
-      // Site Type（オプション）
-      const st = data.site_type || {};
-      const code = st.code || '-';
-      const wc = (st.W_C && st.W_C.pole) || '-';
-      const bs = (st.B_S && st.B_S.pole) || '-';
-      const fl = (st.F_L && st.F_L.pole) || '-';
-      const ht = (st.H_T && st.H_T.pole) || '-';
+  // -------- Render (Meta) --------
+  const metaEl = document.getElementById('meta');
+  metaEl.innerHTML = `
+    <h2>対象</h2>
+    <div>URL: <a href="${escapeHtml(model.target_url||'-')}" target="_blank" rel="noreferrer">${escapeHtml(model.target_url||'-')}</a></div>
+    <div>Run: <span class="code">${escapeHtml(model.run_id||'-')}</span> / Engine: ${escapeHtml(model.engine_label||'-')}</div>
+    <div>SiteType: <span class="code">${escapeHtml(model.site_type?.code||'-')}</span>
+      （W/C=${escapeHtml(model.site_type?.W_C?.pole||'-')} /
+         B/S=${escapeHtml(model.site_type?.B_S?.pole||'-')} /
+         F/L=${escapeHtml(model.site_type?.F_L?.pole||'-')} /
+         H/T=${escapeHtml(model.site_type?.H_T?.pole||'-')}）</div>
+    <div>Evaluated: ${escapeHtml(model.evaluated_at||'-')}</div>
+  `;
 
-      // Meta表示
-      elMeta.innerHTML = `
-        <h2>対象</h2>
-        <div>URL: ${
-          targetUrl && targetUrl !== '-' ? `<a href="${targetUrl}" target="_blank" rel="noreferrer">${targetUrl}</a>` : '-'
-        }</div>
-        <div>Run: <span class="code">${runId}</span> / Engine: ${engine}</div>
-        <div>SiteType: <span class="code">${code}</span>
-          <span class="muted">（W/C=${wc} / B/S=${bs} / F/L=${fl} / H/T=${ht}）</span></div>
-        <div>Evaluated: ${evaluatedAt}</div>
-        <div class="muted">Source: ${payload.source ? payload.source.file_name : '-'}</div>
-      `;
+  // -------- Render (Tier1: numbers) --------
+  const t1Div = document.getElementById('t1');
+  if ((model.tier1||[]).length) {
+    const line = model.tier1.map(x => `${x.name}: <b>${x.normalized_100 ?? '-'}</b>`).join(' / ');
+    t1Div.innerHTML = line;
+  } else {
+    t1Div.textContent = '—';
+  }
 
-      // Tier1（Warmth/Competence/Momentum）
-      const t1arr = Array.isArray(data.tier1) ? data.tier1 : [];
-      // normalized_100 または normalized を優先的に使う
-      const t1map = t1arr.reduce((m,x)=>{
-        const v = typeof x.normalized_100 === 'number' ? x.normalized_100
-                : typeof x.normalized      === 'number' ? Math.round(x.normalized)
-                : typeof x.score            === 'number' ? Math.round(x.score*20) // 0-5→0-100
-                : null;
-        m[x.name] = v;
-        return m;
-      }, {});
-      const t1html = Object.entries(t1map).length
-        ? Object.entries(t1map).map(([k,v])=>`${k}: <b>${v ?? '-'}</b>`).join(' / ')
-        : '<span class="muted">No Tier1 data</span>';
-      elT1.innerHTML = t1html;
-
-      // Tier2 レーダー
-      const t2arr = (Array.isArray(data.tier2) ? data.tier2 : [])
-        .map(d => ({
-          name: d.name,
-          value: (typeof d.normalized_100 === 'number') ? d.normalized_100
-               : (typeof d.normalized      === 'number') ? Math.round(d.normalized)
-               : (typeof d.score            === 'number') ? Math.round(d.score*20)
-               : null
-        }))
-        .filter(d => typeof d.value === 'number');
-
-      if (!t2arr.length) {
-        // データ無しの場合は空チャートを抑止
-        document.getElementById('radar').replaceWith((() => {
-          const div = document.createElement('div');
-          div.className = 'muted';
-          div.textContent = 'No Tier2 data';
-          return div;
-        })());
-      } else {
-        new Chart(radarCtx, {
-          type:'radar',
-          data:{
-            labels: t2arr.map(d=>d.name),
-            datasets:[{ label:'Tier2', data: t2arr.map(d=>d.value) }]
-          },
-          options:{
-            responsive:true,
-            scales:{ r:{ suggestedMin:0, suggestedMax:100, ticks:{ stepSize:20 } } },
-            plugins:{ legend:{ display:false } }
-          }
-        });
+  // -------- Render (Tier2: radar) --------
+  const t2 = (model.tier2 || []).filter(x => typeof x.normalized_100 === 'number');
+  const ctx = document.getElementById('radar').getContext('2d');
+  if (t2.length) {
+    new Chart(ctx, {
+      type: 'radar',
+      data: {
+        labels: t2.map(d => d.name),
+        datasets: [{ label: 'Tier2', data: t2.map(d => d.normalized_100) }]
+      },
+      options: {
+        responsive: true,
+        scales: { r: { suggestedMin: 0, suggestedMax: 100, ticks: { stepSize: 20 } } },
+        plugins: { legend: { display: false } }
       }
-    } catch (err) {
-      console.error(err);
-      document.getElementById('meta').innerHTML =
-        `<b style="color:#c00">Error:</b> ${String(err && err.message || err)}`;
+    });
+  } else {
+    ctx.canvas.parentElement.innerHTML = '<div>Tier2データがありません</div>';
+  }
+
+  // ===== Helpers =====
+  function fromFlat(rows) {
+    // 代表メタ
+    const meta = rows[0] || {};
+    const run_id = meta.run_id || null;
+    const engine_label = meta.engine_label || null;
+    const target_url = meta.target_url || null;
+
+    // Tier1
+    const t1 = rows
+      .filter(r => r.tier === 'tier1' && r.metric === 'normalized_100')
+      .map(r => ({ name: r.name, normalized_100: r.value }));
+
+    // Tier2
+    const t2 = rows
+      .filter(r => r.tier === 'tier2' && r.metric === 'normalized_100')
+      .map(r => ({ name: r.name, normalized_100: r.value }));
+
+    // SiteType
+    const code = pickFlat(rows, 'site_type', 'code', 'code');
+    const wc   = pickFlat(rows, 'site_type', 'W_C', 'pole');
+    const bs   = pickFlat(rows, 'site_type', 'B_S', 'pole');
+    const fl   = pickFlat(rows, 'site_type', 'F_L', 'pole');
+    const ht   = pickFlat(rows, 'site_type', 'H_T', 'pole');
+
+    return {
+      run_id, engine_label, target_url,
+      evaluated_at: null, // flatには無い想定
+      tier1: t1, tier2: t2,
+      site_type: {
+        code,
+        W_C: wc ? { pole: wc } : null,
+        B_S: bs ? { pole: bs } : null,
+        F_L: fl ? { pole: fl } : null,
+        H_T: ht ? { pole: ht } : null
+      }
+    };
+  }
+
+  function pickFlat(rows, tier, name, metric) {
+    const hit = rows.find(r => r.tier === tier && r.name === name && r.metric === metric);
+    return hit ? hit.value : null;
+  }
+
+  function fromNested(obj) {
+    // tier1_scores が {Warmth:30,...} なら配列化
+    let t1 = [];
+    if (Array.isArray(obj.tier1)) {
+      t1 = obj.tier1.map(x => ({ name: x.name, normalized_100: x.normalized_100 ?? x.normalized }));
+    } else if (obj.tier1_scores && typeof obj.tier1_scores === 'object') {
+      t1 = Object.entries(obj.tier1_scores).map(([k, v]) => ({ name: k, normalized_100: v }));
     }
-  })();
-  </script>
+
+    // tier2_scores 配列 → normalized_100を拾う
+    const t2src = obj.tier2 || obj.tier2_scores || [];
+    const t2 = (Array.isArray(t2src) ? t2src : []).map(x => ({
+      name: x.name, normalized_100: x.normalized_100 ?? x.normalized
+    }));
+
+    return {
+      run_id: obj.metadata?.run_id || obj.run?.run_id || null,
+      engine_label: obj.metadata?.engine_label || obj.run?.engine_label || null,
+      target_url: obj.metadata?.target_url || obj.run?.target_url || null,
+      evaluated_at: obj.metadata?.evaluated_at || null,
+      tier1: t1,
+      tier2: t2,
+      site_type: obj.site_type || null
+    };
+  }
+
+  function escapeHtml(s) {
+    return String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  }
+})();
+</script>
 </body>
 </html>
