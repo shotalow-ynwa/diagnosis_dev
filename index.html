@@ -60,24 +60,39 @@
   }
 
   // -------- Render (Tier2: radar) --------
-  const t2 = (model.tier2 || []).filter(x => typeof x.normalized_100 === 'number');
-  const ctx = document.getElementById('radar').getContext('2d');
-  if (t2.length) {
-    new Chart(ctx, {
-      type: 'radar',
-      data: {
-        labels: t2.map(d => d.name),
-        datasets: [{ label: 'Tier2', data: t2.map(d => d.normalized_100) }]
-      },
-      options: {
-        responsive: true,
-        scales: { r: { suggestedMin: 0, suggestedMax: 100, ticks: { stepSize: 20 } } },
-        plugins: { legend: { display: false } }
-      }
-    });
-  } else {
-    ctx.canvas.parentElement.innerHTML = '<div>Tier2データがありません</div>';
-  }
+const t2 = (model.tier2 || []).filter(x => typeof x.normalized_100 === 'number');
+const ctx = document.getElementById('radar').getContext('2d');
+
+if (t2.length >= 3) {
+  new Chart(ctx, {
+    type:'radar',
+    data:{
+      labels: t2.map(d=>d.name),
+      datasets:[{ label:'Tier2', data: t2.map(d=>d.normalized_100), fill:true }]
+    },
+    options:{
+      responsive:true,
+      scales:{ r:{ suggestedMin:0, suggestedMax:100, ticks:{ stepSize:20 } } },
+      plugins:{ legend:{ display:false } }
+    }
+  });
+} else if (t2.length > 0) {
+  new Chart(ctx, {
+    type:'bar',
+    data:{
+      labels: t2.map(d=>d.name),
+      datasets:[{ label:'Tier2', data: t2.map(d=>d.normalized_100) }]
+    },
+    options:{
+      indexAxis:'y',
+      responsive:true,
+      scales:{ x:{ min:0, max:100, ticks:{ stepSize:20 } } },
+      plugins:{ legend:{ display:false } }
+    }
+  });
+} else {
+  ctx.canvas.parentElement.innerHTML = '<div>Tier2データがありません</div>';
+}
 
   // ===== Helpers =====
   function fromFlat(rows) {
