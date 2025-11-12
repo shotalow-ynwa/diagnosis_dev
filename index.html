@@ -15,6 +15,20 @@
   </style>
 </head>
 <body>
+  <div id="header" class="card"></div>
+<script>
+function renderHeader(data){
+  const st = data.site_type || {};
+  const conf = st.confidence || {}; // {W_C:0.78 ...} を出せるなら（なければ省略）
+  document.getElementById('header').innerHTML = `
+    <h2>Site Type Code: <span class="code">${st.code || '-'}</span></h2>
+    <div>W/C=${st?.W_C?.pole||'-'} (${(conf.W_C??'-')}) /
+         B/S=${st?.B_S?.pole||'-'} (${(conf.B_S??'-')}) /
+         F/L=${st?.F_L?.pole||'-'} (${(conf.F_L??'-')}) /
+         H/T=${st?.H_T?.pole||'-'} (${(conf.H_T??'-')})</div>
+  `;
+}
+</script>
   <h1>Site Eval Dashboard (PoC)</h1>
   <form id="runForm" class="card" style="margin:16px 0;">
   <label>評価URL: <input name="url" required style="width:60%"></label>
@@ -26,7 +40,7 @@
   <span id="runMsg"></span>
 </form>
 <script>
-const JOB_API = '<<AppsScriptのWebApp URL>>/exec'; // doPost対応
+const JOB_API = 'https://script.google.com/macros/s/AKfycbyiSIJfFEmrbumIe1HX6z5W_wZtPBuEoNPAkk-8jjdvAspVUpq0Irc1QLRq1w-F0yaIHg/exec'; // doPost対応
 const TOKEN = '<<任意: ScriptPropertiesのAPI_TOKEN>>';
 document.getElementById('runForm').addEventListener('submit', async (e)=>{
   e.preventDefault();
@@ -45,6 +59,7 @@ document.getElementById('runForm').addEventListener('submit', async (e)=>{
     body: JSON.stringify(payload)
   });
   const j = await r.json();
+  console.log('jobAPI response:', j);
   document.getElementById('runMsg').textContent =
     j.ok ? `ジョブ登録: ${j.job_id}` : `エラー: ${j.error||'unknown'}`;
 });
@@ -57,19 +72,72 @@ document.getElementById('runForm').addEventListener('submit', async (e)=>{
 
 <script>
 (async function () {
-  // ★あなたのWeb App URLに置き換え
-  const API = 'https://script.google.com/macros/s/AKfycbyo8iTPtCLE2T20QayS5Ja_wOCxlhlkj5qGQnUKvvF7TVJvhjfXqFePUvoFftgjulqaPA/exec?latest=1';
+  /** =============================
+   *  CONFIG
+   *  ============================= */
+  // ★Apps Script doGet（Code.gs側）WebAppのベースURL（末尾は /exec で終わること）
+  const BASE_API = 'https://script.google.com/macros/s/AKfycbyo8iTPtCLE2T20QayS5Ja_wOCxlhlkj5qGQnUKvvF7TVJvhjfXqFePUvoFftgjulqaPA/exec';
+  const DEFAULT_QUERY = 'latest=1'; // ?latest=1 を既定に
 
-  // -------- Fetch & Normalize --------
-  const resp = await fetch(API);
-  const payload = await resp.json();
-  if (!payload.ok) throw new Error(payload.error || 'API error');
+  /** =============================
+   *  Build API URL from querystring
+   *  ============================= */
+  function buildApiUrl(base, defaultQuery) {
+    const qsIn = new URLSearchParams(location.search);
+    const qsOut = new URLSearchParams();
+
+    // 透過パラメタ：run_id / engine / token
+    ['run_id', 'engine', 'token', 'latest'].forEach(k => {
+      const v = qsIn.get(k);
+      if (v != null && v !== '') qsOut.set(k, v);
+    });
+
+    // 何も指定がなければ latest=1 を追加
+    if (![...qsOut.keys()].length) {
+      defaultQuery.split('&').forEach(pair => {
+        const [k, v] = pair.split('=');
+        if (k) qsOut.set(k, v ?? '');
+      });
+    }
+
+    const s = qsOut.toString();
+    return s ? `${base}?${s}` : base;
+  }
+
+  const API = buildApiUrl(BASE_API, DEFAULT_QUERY);
+
+  /** =============================
+   *  Fetch & Normalize
+   *  ============================= */
+  let payload;
+  try {
+    const resp = await fetch(API, { method: 'GET' });
+    payload = await resp.json();
+  } catch (e) {
+    showError(`API fetch failed: ${String(e)}`);
+    return;
+  }
+  if (!payload || payload.ok === false) {
+    showError(`API error: ${payload && (payload.error || 'unknown')}`);
+    return;
+  }
+
   const raw = payload.data;
-
-  // フラット(socres_flat) or ネスト(scores) をユニファイ
+  // フラット(scores_flat) or ネスト(scores) をユニファイ
   const model = Array.isArray(raw) ? fromFlat(raw) : fromNested(raw);
 
-  // -------- Render (Meta) --------
+  /** =============================
+   *  Render Header (Site Type)
+   *  ============================= */
+  try {
+    renderHeader({ site_type: model.site_type });
+  } catch (e) {
+    // headerは必須ではないので握りつぶし
+  }
+
+  /** =============================
+   *  Render (Meta)
+   *  ============================= */
   const metaEl = document.getElementById('meta');
   metaEl.innerHTML = `
     <h2>対象</h2>
@@ -81,53 +149,60 @@ document.getElementById('runForm').addEventListener('submit', async (e)=>{
          F/L=${escapeHtml(model.site_type?.F_L?.pole||'-')} /
          H/T=${escapeHtml(model.site_type?.H_T?.pole||'-')}）</div>
     <div>Evaluated: ${escapeHtml(model.evaluated_at||'-')}</div>
+    ${payload.source ? `<div class="muted">source: ${escapeHtml(payload.source.file_name||'')} / ${escapeHtml(payload.source.last_updated_iso||'')}</div>` : '' }
   `;
 
-  // -------- Render (Tier1: numbers) --------
+  /** =============================
+   *  Render (Tier1)
+   *  ============================= */
   const t1Div = document.getElementById('t1');
   if ((model.tier1||[]).length) {
-    const line = model.tier1.map(x => `${x.name}: <b>${x.normalized_100 ?? '-'}</b>`).join(' / ');
+    const line = model.tier1.map(x => `${escapeHtml(x.name)}: <b>${x.normalized_100 ?? '-'}</b>`).join(' / ');
     t1Div.innerHTML = line;
   } else {
     t1Div.textContent = '—';
   }
 
-  // -------- Render (Tier2: radar) --------
-const t2 = (model.tier2 || []).filter(x => typeof x.normalized_100 === 'number');
-const ctx = document.getElementById('radar').getContext('2d');
+  /** =============================
+   *  Render (Tier2 → Radar / Bar fallback)
+   *  ============================= */
+  const t2 = (model.tier2 || []).filter(x => typeof x.normalized_100 === 'number');
+  const ctx = document.getElementById('radar').getContext('2d');
 
-if (t2.length >= 3) {
-  new Chart(ctx, {
-    type:'radar',
-    data:{
-      labels: t2.map(d=>d.name),
-      datasets:[{ label:'Tier2', data: t2.map(d=>d.normalized_100), fill:true }]
-    },
-    options:{
-      responsive:true,
-      scales:{ r:{ suggestedMin:0, suggestedMax:100, ticks:{ stepSize:20 } } },
-      plugins:{ legend:{ display:false } }
-    }
-  });
-} else if (t2.length > 0) {
-  new Chart(ctx, {
-    type:'bar',
-    data:{
-      labels: t2.map(d=>d.name),
-      datasets:[{ label:'Tier2', data: t2.map(d=>d.normalized_100) }]
-    },
-    options:{
-      indexAxis:'y',
-      responsive:true,
-      scales:{ x:{ min:0, max:100, ticks:{ stepSize:20 } } },
-      plugins:{ legend:{ display:false } }
-    }
-  });
-} else {
-  ctx.canvas.parentElement.innerHTML = '<div>Tier2データがありません</div>';
-}
+  if (t2.length >= 3) {
+    new Chart(ctx, {
+      type:'radar',
+      data:{
+        labels: t2.map(d=>d.name),
+        datasets:[{ label:'Tier2', data: t2.map(d=>d.normalized_100), fill:true }]
+      },
+      options:{
+        responsive:true,
+        scales:{ r:{ suggestedMin:0, suggestedMax:100, ticks:{ stepSize:20 } } },
+        plugins:{ legend:{ display:false } }
+      }
+    });
+  } else if (t2.length > 0) {
+    new Chart(ctx, {
+      type:'bar',
+      data:{
+        labels: t2.map(d=>d.name),
+        datasets:[{ label:'Tier2', data: t2.map(d=>d.normalized_100) }]
+      },
+      options:{
+        indexAxis:'y',
+        responsive:true,
+        scales:{ x:{ min:0, max:100, ticks:{ stepSize:20 } } },
+        plugins:{ legend:{ display:false } }
+      }
+    });
+  } else {
+    ctx.canvas.parentElement.innerHTML = '<div>Tier2データがありません</div>';
+  }
 
-  // ===== Helpers =====
+  /** =============================
+   *  Helpers
+   *  ============================= */
   function fromFlat(rows) {
     // 代表メタ
     const meta = rows[0] || {};
@@ -198,7 +273,15 @@ if (t2.length >= 3) {
   }
 
   function escapeHtml(s) {
-    return String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    return String(s ?? '').replace(/[&lt;&gt;&amp;&quot;']/g, m => (
+      {'&amp;':'&amp;','&lt;':'&lt;','&gt;':'&gt;','&quot;':'&quot;','&#39;':'&#39;'}[m] || m
+    ));
+  }
+
+  function showError(msg){
+    const meta = document.getElementById('meta');
+    meta.innerHTML = `<div style="color:#b00">Error: ${escapeHtml(msg)}</div>
+      <div class="muted">API: ${escapeHtml(API)}</div>`;
   }
 })();
 </script>
