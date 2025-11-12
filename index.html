@@ -32,18 +32,19 @@ function renderHeader(data){
   const st = data.site_type || {};
   const conf = st.confidence || {}; // {W_C:0.78 ...} を出せるなら（なければ省略）
   const pct = v => (typeof v === 'number' ? Math.round(v*100) + '%' : '-');
+  const confLine = (k) => conf[k] != null ? ` (${pct(conf[k])})` : '';
   document.getElementById('header').innerHTML = `
     <h2>Site Type Code: <span class="code">${st.code || '-'}</span></h2>
-    <div>W/C=${st?.W_C?.pole||'-'} (${pct(conf.W_C)}) /
-         B/S=${st?.B_S?.pole||'-'} (${pct(conf.B_S)}) /
-         F/L=${st?.F_L?.pole||'-'} (${pct(conf.F_L)}) /
-         H/T=${st?.H_T?.pole||'-'} (${pct(conf.H_T)})</div>
+    <div>W/C=${st?.W_C?.pole||'-'}${confLine('W_C')} /
+         B/S=${st?.B_S?.pole||'-'}${confLine('B_S')} /
+         F/L=${st?.F_L?.pole||'-'}${confLine('F_L')} /
+         H/T=${st?.H_T?.pole||'-'}${confLine('H_T')}</div>
   `;
 }
 </script>
   <h1>Site Eval Dashboard (PoC)</h1>
   <form id="runForm" class="card" style="margin:16px 0;">
-  <label>評価URL: <input name="url" required style="width:60%"></label>
+  <label>評価URL: <input name="url" type="url" required style="width:60%"></label>
   <select name="engine">
     <option value="claude">claude</option>
     <option value="codex">codex</option>
@@ -55,10 +56,23 @@ function renderHeader(data){
   <label>履歴: <select id="historySelect"><option value="">最新を表示</option></select></label>
 </div>
 <script>
+/** =============================
+ *  CONFIG（設定の一元化）
+ *  ============================= */
+const BASE_API = 'https://script.google.com/macros/s/AKfycbyo8iTPtCLE2T20QayS5Ja_wOCxlhlkj5qGQnUKvvF7TVJvhjfXqFePUvoFftgjulqaPA/exec';
 const JOB_API = 'https://script.google.com/macros/s/AKfycbyiSIJfFEmrbumIe1HX6z5W_wZtPBuEoNPAkk-8jjdvAspVUpq0Irc1QLRq1w-F0yaIHg/exec'; // doPost対応
+const DEFAULT_QUERY = 'latest=1'; // ?latest=1 を既定に
+// 注意: PoC段階では空でOK。運用フェーズではGAS側でreferrerチェック or ドメイン制限を推奨
 const TOKEN = '<<任意: ScriptPropertiesのAPI_TOKEN>>';
-let pollingInterval = null;
-let currentRunId = null;
+
+// クエリパラメータを安全に追加するユーティリティ
+function withParams(base, obj){
+  const u = new URL(base);
+  Object.entries(obj).forEach(([k,v])=>{
+    if (v !== undefined && v !== null && v !== '') u.searchParams.set(k, v);
+  });
+  return u.toString();
+}
 
 // トースト表示
 function showToast(message, type='success'){
@@ -72,93 +86,133 @@ function showToast(message, type='success'){
   }, 3000);
 }
 
-// ポーリング開始
-function startPolling(runId){
-  if (pollingInterval) clearInterval(pollingInterval);
-  currentRunId = runId;
+// 1) ジョブ投入時：サーバ生成 run_id / job_id を受け取る
+async function enqueueJob(urlValue, engine){
+  const params = new URLSearchParams();
+  params.set('action', 'enqueue');
+  params.set('url', urlValue);
+  params.set('engine', engine || 'claude');
+  params.set('themes', 'ALL');
+  params.set('allowed_items', 'ALL');
+  if (TOKEN && TOKEN !== '<<任意: ScriptPropertiesのAPI_TOKEN>>') {
+    params.set('token', TOKEN);
+  }
+
+  const r = await fetch(JOB_API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: params.toString()
+  });
+  
+  if (!r.ok) {
+    throw new Error(`HTTP ${r.status}: ${r.statusText}`);
+  }
+  
+  const j = await r.json();
+  if (!j.ok) {
+    throw new Error(j.error || 'enqueue failed');
+  }
+  
+  return { job_id: j.job_id, run_id: j.run_id };
+}
+
+// 2) /status を5秒間隔で監視（0/25/50/75/100）→ 100で即座に run_id で再読込
+async function startPolling(jobId, runIdFromServer){
+  const MAX_TRIES = 18; // 90秒（5秒×18）
   const pollMsg = document.getElementById('runMsg');
-  pollMsg.innerHTML = `ジョブ登録完了。結果を待機中... <span class="polling"></span>`;
   
-  let pollCount = 0;
-  const MAX_POLLS = 18; // 90秒（5秒×18回）
-  
-  pollingInterval = setInterval(async ()=>{
-    pollCount++;
-    
-    // タイムアウトチェック
-    if (pollCount >= MAX_POLLS){
-      clearInterval(pollingInterval);
-      pollMsg.innerHTML = '結果が遅延しています。<a href="?latest=1" style="color:#2196f3;text-decoration:underline">履歴から再表示してください</a>';
-      showToast('ポーリングがタイムアウトしました。履歴から確認してください。', 'info');
-      return;
-    }
-    
-    try{
-      const API = buildApiUrl(BASE_API, '');
-      const url = `${API}&run_id=${encodeURIComponent(runId)}`;
-      const resp = await fetch(url);
-      const payload = await resp.json();
+  for (let i = 0; i < MAX_TRIES; i++){
+    try {
+      const url = withParams(BASE_API, { 
+        status: 1, 
+        job_id: jobId,
+        token: (TOKEN && TOKEN !== '<<任意: ScriptPropertiesのAPI_TOKEN>>') ? TOKEN : undefined
+      });
       
-      if (payload.ok && payload.data && payload.data.length > 0){
-        // Tier1データが存在するかチェック
-        const hasTier1 = payload.data.some(r => r.tier === 'tier1' && r.value != null);
-        if (hasTier1){
-          clearInterval(pollingInterval);
-          pollMsg.textContent = '評価完了！';
-          showToast('評価が完了しました', 'success');
-          // ページを再読み込み（run_id付き）
-          window.location.href = `?run_id=${encodeURIComponent(runId)}`;
-        }
+      const res = await fetch(url);
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${res.statusText}`);
       }
-    }catch(e){
+      
+      const j = await res.json().catch(() => ({}));
+      
+      const prog = Number(j.progress?.ratio ?? 0);
+      const status = j.status || 'unknown';
+      
+      // 進捗バー更新（任意）
+      const progPct = Math.round(prog);
+      pollMsg.innerHTML = `解析中... ${progPct}% <span class="polling"></span>`;
+      console.log('status:', prog, status, j.last_error || '');
+      
+      if (status === 'done' && j.run_id){
+        pollMsg.textContent = '評価完了！';
+        showToast('評価が完了しました', 'success');
+        // ページを再読み込み（run_id付き）
+        const dest = withParams(location.origin + location.pathname, { run_id: j.run_id });
+        location.replace(dest);
+        return;
+      }
+      
+      if (status === 'failed'){
+        throw new Error(j.last_error || 'runner failed');
+      }
+      
+      // 5秒待機
+      await new Promise(r => setTimeout(r, 5000));
+    } catch(e) {
       console.error('Polling error:', e);
+      if (i === MAX_TRIES - 1) {
+        throw e; // 最後の試行でエラーなら再スロー
+      }
+      await new Promise(r => setTimeout(r, 5000)); // エラー時も5秒待機
     }
-  }, 5000);
+  }
+  
+  // タイムアウト
+  pollMsg.innerHTML = '結果が遅延しています。<a href="?latest=1" style="color:#2196f3;text-decoration:underline">履歴から再表示してください</a>';
+  showToast('ポーリングがタイムアウトしました。履歴から確認してください。', 'info');
+  throw new Error('timeout waiting for status=done');
 }
 
 // フォーム送信
+// 3) submit ハンドラ
 document.getElementById('runForm').addEventListener('submit', async (e)=>{
   e.preventDefault();
-  const fd = new FormData(e.target);
-  const payload = {
-    action: 'enqueue',
-    url: fd.get('url'),
-    engine: fd.get('engine') || 'claude',
-    themes: 'ALL',
-    allowed_items: 'ALL',
-    token: TOKEN
-  };
-  
   const btn = e.target.querySelector('button[type="submit"]');
   btn.disabled = true;
   btn.textContent = '登録中...';
   
   try{
-    const r = await fetch(JOB_API, {
-      method:'POST',
-      headers:{ 'Content-Type':'application/json' },
-      body: JSON.stringify(payload)
-    });
-    const j = await r.json();
-    console.log('jobAPI response:', j);
-    
-    if (j.ok && j.job_id){
-      showToast(`ジョブ登録完了: ${j.job_id}`, 'success');
-      // ポーリング開始（run_idは後でRunner側から取得される想定）
-      // 暫定：URLから推測できるrun_idを生成（実際はRunner側でjob_id→run_idマッピングが必要）
-      const runId = `run_${new Date().toISOString().replace(/[:.TZ-]/g,'')}`;
-      startPolling(runId);
-      // クエリにjob_idを付与（将来のrun_idマッピング用）
-      const url = new URL(window.location);
-      url.searchParams.set('job_id', j.job_id);
-      window.history.pushState({}, '', url);
-    } else {
-      showToast(`エラー: ${j.error||'unknown'}`, 'error');
+    const fd = new FormData(e.target);
+    const urlValue = fd.get('url') || '';
+
+    // 軽バリデーション
+    try {
+      const u = new URL(urlValue);
+      if (!/^https?:$/.test(u.protocol)) {
+        throw new Error('URL protocol must be http/https');
+      }
+    } catch (urlErr) {
+      showToast(`URLが不正です: ${String(urlErr)}`, 'error');
       btn.disabled = false;
       btn.textContent = '評価ジョブを作成';
+      return;
     }
-  }catch(err){
-    showToast(`エラー: ${String(err)}`, 'error');
+
+    // enqueue → status polling → 自動遷移
+    const { job_id, run_id } = await enqueueJob(urlValue, fd.get('engine'));
+    
+    // デバッグ用にクエリへ保持
+    history.replaceState(null, '', withParams(location.href, { job_id, run_id }));
+    
+    showToast(`ジョブ登録完了: ${job_id}`, 'success');
+    
+    // ポーリング開始（/statusベース）
+    await startPolling(job_id, run_id);
+    
+  } catch(err){
+    console.error('Form submit error:', err);
+    showToast(`ジョブ開始に失敗: ${String(err)}`, 'error');
     btn.disabled = false;
     btn.textContent = '評価ジョブを作成';
   }
@@ -171,7 +225,7 @@ async function loadHistory(){
   
   try{
     const API = buildApiUrl(BASE_API, '');
-    const url = `${API}&list=1&limit=20`;
+    const url = withParams(API, { list: 1, limit: 20 });
     const resp = await fetch(url);
     const payload = await resp.json();
     
@@ -180,7 +234,12 @@ async function loadHistory(){
       payload.data.forEach(item=>{
         const opt = document.createElement('option');
         opt.value = item.run_id;
-        opt.textContent = `${item.run_id} (${item.engine_label}) - ${item.site_type_code || '-'} - ${item.evaluated_at ? new Date(item.evaluated_at).toLocaleString('ja-JP') : ''}`;
+        // ラベル順序：RunID → SiteType → 日時 → Engine（視線の流れを最適化）
+        const dateStr = item.evaluated_at ? new Date(item.evaluated_at).toLocaleString('ja-JP') : '';
+        const labelText = `${item.run_id} - ${item.site_type_code || '-'} - ${dateStr} - ${item.engine_label}`;
+        opt.textContent = labelText;
+        // title属性でロングテキストのホバー確認を可能に
+        opt.title = labelText;
         select.appendChild(opt);
       });
       
@@ -202,8 +261,10 @@ async function loadHistory(){
 document.getElementById('historySelect').addEventListener('change', (e)=>{
   const runId = e.target.value;
   if (runId){
+    // 特定のrun_idを選択：run_idを優先（latestは無視）
     window.location.href = `?run_id=${encodeURIComponent(runId)}`;
   } else {
+    // 「最新を表示」を選択：latest=1をセット（run_idをクリア）
     window.location.href = '?latest=1';
   }
 });
@@ -225,10 +286,6 @@ loadHistory();
   </div>
 
 <script>
-// BASE_APIをグローバルに（ポーリング用）
-const BASE_API = 'https://script.google.com/macros/s/AKfycbyo8iTPtCLE2T20QayS5Ja_wOCxlhlkj5qGQnUKvvF7TVJvhjfXqFePUvoFftgjulqaPA/exec';
-const DEFAULT_QUERY = 'latest=1'; // ?latest=1 を既定に
-
 /** =============================
  *  Build API URL from querystring
  *  ============================= */
@@ -237,10 +294,16 @@ function buildApiUrl(base, defaultQuery) {
   const qsOut = new URLSearchParams();
 
   // 透過パラメタ：run_id / engine / token / latest / list
+  // 注意: run_id と latest が同時に指定された場合は run_id を優先（明示指定を尊重）
   ['run_id', 'engine', 'token', 'latest', 'list', 'limit'].forEach(k => {
     const v = qsIn.get(k);
     if (v != null && v !== '') qsOut.set(k, v);
   });
+
+  // run_idがあればlatestを削除（run_id優先を実装で明示）
+  if (qsOut.has('run_id')) {
+    qsOut.delete('latest');
+  }
 
   // 何も指定がなければ latest=1 を追加
   if (![...qsOut.keys()].length) {
@@ -266,9 +329,14 @@ function buildApiUrl(base, defaultQuery) {
   let payload;
   try {
     const resp = await fetch(API, { method: 'GET' });
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+    }
     payload = await resp.json();
   } catch (e) {
-    showError(`API fetch failed: ${String(e)}`);
+    // Network失敗時はリトライボタンを表示
+    const isNetworkError = e instanceof TypeError || e.message.includes('fetch');
+    showError(`API fetch failed: ${String(e)}`, isNetworkError);
     return;
   }
   if (!payload || payload.ok === false) {
@@ -323,6 +391,12 @@ function buildApiUrl(base, defaultQuery) {
   const t2 = (model.tier2 || []).filter(x => typeof x.normalized_100 === 'number');
   const ctx = document.getElementById('radar').getContext('2d');
 
+  // 既存のChartインスタンスを破棄（SPA化時のメモリリーク防止）
+  const existingChart = Chart.getChart(ctx.canvas);
+  if (existingChart) {
+    existingChart.destroy();
+  }
+
   if (t2.length >= 3) {
     new Chart(ctx, {
       type:'radar',
@@ -337,6 +411,7 @@ function buildApiUrl(base, defaultQuery) {
       }
     });
   } else if (t2.length > 0) {
+    // 2軸以下はバー表示（1軸もバーで表示）
     new Chart(ctx, {
       type:'bar',
       data:{
@@ -358,11 +433,14 @@ function buildApiUrl(base, defaultQuery) {
    *  Render (Top Drivers)
    *  ============================= */
   const topDriversEl = document.getElementById('topDrivers');
+  // 数値フォーマッタ：整数なら整数表示、小数なら小数1桁（将来の要望に備えて関数化）
+  const fmt = v => Number.isFinite(v) ? (v % 1 === 0 ? String(v) : v.toFixed(1)) : '-';
+  
   if (t2.length > 0){
     const sorted = [...t2].sort((a,b) => (b.normalized_100 || 0) - (a.normalized_100 || 0));
     const top3 = sorted.slice(0, 3);
     topDriversEl.innerHTML = top3.map(d => {
-      const val = Number.isFinite(d.normalized_100) ? d.normalized_100.toFixed(1) : '-';
+      const val = fmt(d.normalized_100);
       return `<li><strong>${escapeHtml(d.name)}</strong>: ${val}</li>`;
     }).join('');
   } else {
@@ -442,15 +520,63 @@ function buildApiUrl(base, defaultQuery) {
   }
 
   function escapeHtml(s) {
-    return String(s ?? '').replace(/[&lt;&gt;&amp;&quot;']/g, m => (
-      {'&amp;':'&amp;','&lt;':'&lt;','&gt;':'&gt;','&quot;':'&quot;','&#39;':'&#39;'}[m] || m
+    return String(s ?? '').replace(/[&<>"']/g, c => (
+      {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;', "'":'&#39;'}[c]
     ));
   }
 
-  function showError(msg){
+  function showError(msg, isNetworkError = false){
+    // 例外時のUI連動：全セクションを「データなし」表示に切替
     const meta = document.getElementById('meta');
-    meta.innerHTML = `<div style="color:#b00">Error: ${escapeHtml(msg)}</div>
+    let errorHtml = `<div style="color:#b00">Error: ${escapeHtml(msg)}</div>
       <div class="muted">API: ${escapeHtml(API)}</div>`;
+    
+    // Network失敗時のみリトライボタンを表示
+    if (isNetworkError) {
+      errorHtml += `<div style="margin-top:12px;">
+        <button onclick="window.location.reload()" style="padding:8px 16px;background:#2196f3;color:white;border:none;border-radius:4px;cursor:pointer;">
+          リトライ
+        </button>
+      </div>`;
+    }
+    
+    meta.innerHTML = errorHtml;
+    
+    // Headerをクリア
+    const header = document.getElementById('header');
+    if (header) {
+      header.innerHTML = '<h2>Site Type Code: <span class="code">-</span></h2><div>データなし</div>';
+    }
+    
+    // Tier1をクリア
+    const t1Div = document.getElementById('t1');
+    if (t1Div) {
+      t1Div.textContent = '—';
+    }
+    
+    // Tier2チャートをクリア（canvasは残して中身だけクリア）
+    const radarEl = document.getElementById('radar');
+    if (radarEl) {
+      // canvasをcloneNodeで置き換え（再描画ロジックが同一DOM前提でも安全）
+      const newCanvas = radarEl.cloneNode(true);
+      radarEl.replaceWith(newCanvas);
+      // 親要素にメッセージを追加
+      const parent = newCanvas.parentElement;
+      if (parent && !parent.querySelector('.error-msg')) {
+        const msg = document.createElement('div');
+        msg.className = 'error-msg';
+        msg.textContent = 'Tier2データがありません';
+        msg.style.marginTop = '8px';
+        msg.style.color = '#666';
+        parent.appendChild(msg);
+      }
+    }
+    
+    // Top Driversをクリア
+    const topDriversEl = document.getElementById('topDrivers');
+    if (topDriversEl) {
+      topDriversEl.innerHTML = '<li>データがありません</li>';
+    }
   }
 })();
 </script>
