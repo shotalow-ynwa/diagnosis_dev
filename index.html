@@ -16,6 +16,39 @@
 </head>
 <body>
   <h1>Site Eval Dashboard (PoC)</h1>
+  <form id="runForm" class="card" style="margin:16px 0;">
+  <label>評価URL: <input name="url" required style="width:60%"></label>
+  <select name="engine">
+    <option value="claude">claude</option>
+    <option value="codex">codex</option>
+  </select>
+  <button type="submit">評価ジョブを作成</button>
+  <span id="runMsg"></span>
+</form>
+<script>
+const JOB_API = '<<AppsScriptのWebApp URL>>/exec'; // doPost対応
+const TOKEN = '<<任意: ScriptPropertiesのAPI_TOKEN>>';
+document.getElementById('runForm').addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const payload = {
+    action: 'enqueue',
+    url: fd.get('url'),
+    engine: fd.get('engine') || 'claude',
+    themes: 'ALL',
+    allowed_items: 'ALL',
+    token: TOKEN
+  };
+  const r = await fetch(JOB_API, {
+    method:'POST',
+    headers:{ 'Content-Type':'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const j = await r.json();
+  document.getElementById('runMsg').textContent =
+    j.ok ? `ジョブ登録: ${j.job_id}` : `エラー: ${j.error||'unknown'}`;
+});
+</script>
   <div id="meta" class="card">Loading…</div>
   <div class="wrap">
     <div class="card"><h2>Tier1（三角値）</h2><div id="t1"></div></div>
