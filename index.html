@@ -12,6 +12,17 @@
     h2{margin:.2em 0}
     .code{font-family:ui-monospace,Menlo,Consolas,monospace}
     .muted{color:#666;font-size:.9em}
+    .toast{position:fixed;top:20px;right:20px;padding:12px 20px;background:#4caf50;color:white;border-radius:8px;box-shadow:0 4px 6px rgba(0,0,0,0.1);z-index:1000;animation:slideIn 0.3s;}
+    .toast.error{background:#f44336}
+    .toast.info{background:#2196f3}
+    @keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+    .polling{display:inline-block;margin-left:8px;color:#666;font-size:.9em}
+    .polling::after{content:'●';animation:pulse 1s infinite}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
+    #historySelect{margin:8px 0;padding:4px 8px;font-size:.9em}
+    .top-drivers{list-style:none;padding:0;margin:8px 0}
+    .top-drivers li{padding:4px 0;border-bottom:1px solid #eee}
+    .top-drivers li:last-child{border-bottom:none}
   </style>
 </head>
 <body>
@@ -20,12 +31,13 @@
 function renderHeader(data){
   const st = data.site_type || {};
   const conf = st.confidence || {}; // {W_C:0.78 ...} を出せるなら（なければ省略）
+  const pct = v => (typeof v === 'number' ? Math.round(v*100) + '%' : '-');
   document.getElementById('header').innerHTML = `
     <h2>Site Type Code: <span class="code">${st.code || '-'}</span></h2>
-    <div>W/C=${st?.W_C?.pole||'-'} (${(conf.W_C??'-')}) /
-         B/S=${st?.B_S?.pole||'-'} (${(conf.B_S??'-')}) /
-         F/L=${st?.F_L?.pole||'-'} (${(conf.F_L??'-')}) /
-         H/T=${st?.H_T?.pole||'-'} (${(conf.H_T??'-')})</div>
+    <div>W/C=${st?.W_C?.pole||'-'} (${pct(conf.W_C)}) /
+         B/S=${st?.B_S?.pole||'-'} (${pct(conf.B_S)}) /
+         F/L=${st?.F_L?.pole||'-'} (${pct(conf.F_L)}) /
+         H/T=${st?.H_T?.pole||'-'} (${pct(conf.H_T)})</div>
   `;
 }
 </script>
@@ -39,9 +51,72 @@ function renderHeader(data){
   <button type="submit">評価ジョブを作成</button>
   <span id="runMsg"></span>
 </form>
+<div class="card" style="margin:16px 0;">
+  <label>履歴: <select id="historySelect"><option value="">最新を表示</option></select></label>
+</div>
 <script>
 const JOB_API = 'https://script.google.com/macros/s/AKfycbyiSIJfFEmrbumIe1HX6z5W_wZtPBuEoNPAkk-8jjdvAspVUpq0Irc1QLRq1w-F0yaIHg/exec'; // doPost対応
 const TOKEN = '<<任意: ScriptPropertiesのAPI_TOKEN>>';
+let pollingInterval = null;
+let currentRunId = null;
+
+// トースト表示
+function showToast(message, type='success'){
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+  toast.textContent = message;
+  document.body.appendChild(toast);
+  setTimeout(()=>{
+    toast.style.animation = 'slideIn 0.3s reverse';
+    setTimeout(()=>toast.remove(), 300);
+  }, 3000);
+}
+
+// ポーリング開始
+function startPolling(runId){
+  if (pollingInterval) clearInterval(pollingInterval);
+  currentRunId = runId;
+  const pollMsg = document.getElementById('runMsg');
+  pollMsg.innerHTML = `ジョブ登録完了。結果を待機中... <span class="polling"></span>`;
+  
+  let pollCount = 0;
+  const MAX_POLLS = 18; // 90秒（5秒×18回）
+  
+  pollingInterval = setInterval(async ()=>{
+    pollCount++;
+    
+    // タイムアウトチェック
+    if (pollCount >= MAX_POLLS){
+      clearInterval(pollingInterval);
+      pollMsg.innerHTML = '結果が遅延しています。<a href="?latest=1" style="color:#2196f3;text-decoration:underline">履歴から再表示してください</a>';
+      showToast('ポーリングがタイムアウトしました。履歴から確認してください。', 'info');
+      return;
+    }
+    
+    try{
+      const API = buildApiUrl(BASE_API, '');
+      const url = `${API}&run_id=${encodeURIComponent(runId)}`;
+      const resp = await fetch(url);
+      const payload = await resp.json();
+      
+      if (payload.ok && payload.data && payload.data.length > 0){
+        // Tier1データが存在するかチェック
+        const hasTier1 = payload.data.some(r => r.tier === 'tier1' && r.value != null);
+        if (hasTier1){
+          clearInterval(pollingInterval);
+          pollMsg.textContent = '評価完了！';
+          showToast('評価が完了しました', 'success');
+          // ページを再読み込み（run_id付き）
+          window.location.href = `?run_id=${encodeURIComponent(runId)}`;
+        }
+      }
+    }catch(e){
+      console.error('Polling error:', e);
+    }
+  }, 5000);
+}
+
+// フォーム送信
 document.getElementById('runForm').addEventListener('submit', async (e)=>{
   e.preventDefault();
   const fd = new FormData(e.target);
@@ -53,57 +128,136 @@ document.getElementById('runForm').addEventListener('submit', async (e)=>{
     allowed_items: 'ALL',
     token: TOKEN
   };
-  const r = await fetch(JOB_API, {
-    method:'POST',
-    headers:{ 'Content-Type':'application/json' },
-    body: JSON.stringify(payload)
-  });
-  const j = await r.json();
-  console.log('jobAPI response:', j);
-  document.getElementById('runMsg').textContent =
-    j.ok ? `ジョブ登録: ${j.job_id}` : `エラー: ${j.error||'unknown'}`;
+  
+  const btn = e.target.querySelector('button[type="submit"]');
+  btn.disabled = true;
+  btn.textContent = '登録中...';
+  
+  try{
+    const r = await fetch(JOB_API, {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const j = await r.json();
+    console.log('jobAPI response:', j);
+    
+    if (j.ok && j.job_id){
+      showToast(`ジョブ登録完了: ${j.job_id}`, 'success');
+      // ポーリング開始（run_idは後でRunner側から取得される想定）
+      // 暫定：URLから推測できるrun_idを生成（実際はRunner側でjob_id→run_idマッピングが必要）
+      const runId = `run_${new Date().toISOString().replace(/[:.TZ-]/g,'')}`;
+      startPolling(runId);
+      // クエリにjob_idを付与（将来のrun_idマッピング用）
+      const url = new URL(window.location);
+      url.searchParams.set('job_id', j.job_id);
+      window.history.pushState({}, '', url);
+    } else {
+      showToast(`エラー: ${j.error||'unknown'}`, 'error');
+      btn.disabled = false;
+      btn.textContent = '評価ジョブを作成';
+    }
+  }catch(err){
+    showToast(`エラー: ${String(err)}`, 'error');
+    btn.disabled = false;
+    btn.textContent = '評価ジョブを作成';
+  }
 });
+
+// 履歴セレクタ
+async function loadHistory(){
+  const select = document.getElementById('historySelect');
+  select.innerHTML = '<option value="">読み込み中…</option>';
+  
+  try{
+    const API = buildApiUrl(BASE_API, '');
+    const url = `${API}&list=1&limit=20`;
+    const resp = await fetch(url);
+    const payload = await resp.json();
+    
+    if (payload.ok && payload.data){
+      select.innerHTML = '<option value="">最新を表示</option>';
+      payload.data.forEach(item=>{
+        const opt = document.createElement('option');
+        opt.value = item.run_id;
+        opt.textContent = `${item.run_id} (${item.engine_label}) - ${item.site_type_code || '-'} - ${item.evaluated_at ? new Date(item.evaluated_at).toLocaleString('ja-JP') : ''}`;
+        select.appendChild(opt);
+      });
+      
+      // 現在のrun_idと一致するものを選択
+      const qs = new URLSearchParams(location.search);
+      const currentRunId = qs.get('run_id');
+      if (currentRunId){
+        select.value = currentRunId;
+      }
+    } else {
+      select.innerHTML = '<option value="">取得失敗</option>';
+    }
+  }catch(e){
+    console.error('History load error:', e);
+    select.innerHTML = '<option value="">取得失敗</option>';
+  }
+}
+
+document.getElementById('historySelect').addEventListener('change', (e)=>{
+  const runId = e.target.value;
+  if (runId){
+    window.location.href = `?run_id=${encodeURIComponent(runId)}`;
+  } else {
+    window.location.href = '?latest=1';
+  }
+});
+
+// ページ読み込み時に履歴を読み込む
+loadHistory();
 </script>
   <div id="meta" class="card">Loading…</div>
   <div class="wrap">
     <div class="card"><h2>Tier1（三角値）</h2><div id="t1"></div></div>
-    <div class="card"><h2>Tier2（レーダー）</h2><canvas id="radar" height="280"></canvas></div>
+    <div class="card">
+      <h2>Tier2（レーダー）</h2>
+      <canvas id="radar" height="280"></canvas>
+      <div style="margin-top:16px;">
+        <h3 style="font-size:1em;margin:.5em 0">Top Drivers</h3>
+        <ul id="topDrivers" class="top-drivers"></ul>
+      </div>
+    </div>
   </div>
 
 <script>
+// BASE_APIをグローバルに（ポーリング用）
+const BASE_API = 'https://script.google.com/macros/s/AKfycbyo8iTPtCLE2T20QayS5Ja_wOCxlhlkj5qGQnUKvvF7TVJvhjfXqFePUvoFftgjulqaPA/exec';
+const DEFAULT_QUERY = 'latest=1'; // ?latest=1 を既定に
+
+/** =============================
+ *  Build API URL from querystring
+ *  ============================= */
+function buildApiUrl(base, defaultQuery) {
+  const qsIn = new URLSearchParams(location.search);
+  const qsOut = new URLSearchParams();
+
+  // 透過パラメタ：run_id / engine / token / latest / list
+  ['run_id', 'engine', 'token', 'latest', 'list', 'limit'].forEach(k => {
+    const v = qsIn.get(k);
+    if (v != null && v !== '') qsOut.set(k, v);
+  });
+
+  // 何も指定がなければ latest=1 を追加
+  if (![...qsOut.keys()].length) {
+    defaultQuery.split('&').forEach(pair => {
+      const [k, v] = pair.split('=');
+      if (k) qsOut.set(k, v ?? '');
+    });
+  }
+
+  const s = qsOut.toString();
+  return s ? `${base}?${s}` : base;
+}
+
 (async function () {
   /** =============================
    *  CONFIG
    *  ============================= */
-  // ★Apps Script doGet（Code.gs側）WebAppのベースURL（末尾は /exec で終わること）
-  const BASE_API = 'https://script.google.com/macros/s/AKfycbyo8iTPtCLE2T20QayS5Ja_wOCxlhlkj5qGQnUKvvF7TVJvhjfXqFePUvoFftgjulqaPA/exec';
-  const DEFAULT_QUERY = 'latest=1'; // ?latest=1 を既定に
-
-  /** =============================
-   *  Build API URL from querystring
-   *  ============================= */
-  function buildApiUrl(base, defaultQuery) {
-    const qsIn = new URLSearchParams(location.search);
-    const qsOut = new URLSearchParams();
-
-    // 透過パラメタ：run_id / engine / token
-    ['run_id', 'engine', 'token', 'latest'].forEach(k => {
-      const v = qsIn.get(k);
-      if (v != null && v !== '') qsOut.set(k, v);
-    });
-
-    // 何も指定がなければ latest=1 を追加
-    if (![...qsOut.keys()].length) {
-      defaultQuery.split('&').forEach(pair => {
-        const [k, v] = pair.split('=');
-        if (k) qsOut.set(k, v ?? '');
-      });
-    }
-
-    const s = qsOut.toString();
-    return s ? `${base}?${s}` : base;
-  }
-
   const API = buildApiUrl(BASE_API, DEFAULT_QUERY);
 
   /** =============================
@@ -198,6 +352,21 @@ document.getElementById('runForm').addEventListener('submit', async (e)=>{
     });
   } else {
     ctx.canvas.parentElement.innerHTML = '<div>Tier2データがありません</div>';
+  }
+
+  /** =============================
+   *  Render (Top Drivers)
+   *  ============================= */
+  const topDriversEl = document.getElementById('topDrivers');
+  if (t2.length > 0){
+    const sorted = [...t2].sort((a,b) => (b.normalized_100 || 0) - (a.normalized_100 || 0));
+    const top3 = sorted.slice(0, 3);
+    topDriversEl.innerHTML = top3.map(d => {
+      const val = Number.isFinite(d.normalized_100) ? d.normalized_100.toFixed(1) : '-';
+      return `<li><strong>${escapeHtml(d.name)}</strong>: ${val}</li>`;
+    }).join('');
+  } else {
+    topDriversEl.innerHTML = '<li>データがありません</li>';
   }
 
   /** =============================
