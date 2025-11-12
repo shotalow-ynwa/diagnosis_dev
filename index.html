@@ -59,11 +59,10 @@ function renderHeader(data){
 /** =============================
  *  CONFIG（設定の一元化）
  *  ============================= */
-const BASE_API = 'https://script.google.com/macros/s/AKfycbyo8iTPtCLE2T20QayS5Ja_wOCxlhlkj5qGQnUKvvF7TVJvhjfXqFePUvoFftgjulqaPA/exec';
-const JOB_API = 'https://script.google.com/macros/s/AKfycbyiSIJfFEmrbumIe1HX6z5W_wZtPBuEoNPAkk-8jjdvAspVUpq0Irc1QLRq1w-F0yaIHg/exec'; // doPost対応
-const DEFAULT_QUERY = 'latest=1'; // ?latest=1 を既定に
-// 注意: PoC段階では空でOK。運用フェーズではGAS側でreferrerチェック or ドメイン制限を推奨
-const TOKEN = '<<任意: ScriptPropertiesのAPI_TOKEN>>';
+const BASE_API = 'https://script.google.com/macros/s/AKfycbyiSIJfFEmrbumIe1HX6z5W_wZtPBuEoNPAkk-8jjdvAspVUpq0Irc1QLRq1w-F0yaIHg/exec';
+const JOB_API = 'https://script.google.com/macros/s/AKfycbyiSIJfFEmrbumIe1HX6z5W_wZtPBuEoNPAkk-8jjdvAspVUpq0Irc1QLRq1w-F0yaIHg/exec';
+const DEFAULT_QUERY = 'latest=1';
+const TOKEN = ''; // 今はREQUIRE_TOKEN=falseなので空でOK
 
 // クエリパラメータを安全に追加するユーティリティ
 function withParams(base, obj){
