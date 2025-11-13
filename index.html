@@ -59,10 +59,14 @@ function renderHeader(data){
 /** =============================
  *  CONFIG（設定の一元化）
  *  ============================= */
-const BASE_API = 'https://script.google.com/macros/s/AKfycbyiSIJfFEmrbumIe1HX6z5W_wZtPBuEoNPAkk-8jjdvAspVUpq0Irc1QLRq1w-F0yaIHg/exec';
-const JOB_API = 'https://script.google.com/macros/s/AKfycbyiSIJfFEmrbumIe1HX6z5W_wZtPBuEoNPAkk-8jjdvAspVUpq0Irc1QLRq1w-F0yaIHg/exec';
+const BASE_API = 'https://script.google.com/macros/s/AKfycbw9Mcy1bMlhGehGSV_N_QzdGTBTWnfZkd-Tb2o79rbIZ9dHiIa6RH9t0RCn2Ry8MjemsQ/exec';
+const JOB_API = 'https://script.google.com/macros/s/AKfycbw9Mcy1bMlhGehGSV_N_QzdGTBTWnfZkd-Tb2o79rbIZ9dHiIa6RH9t0RCn2Ry8MjemsQ/exec';
 const DEFAULT_QUERY = 'latest=1';
 const TOKEN = ''; // 今はREQUIRE_TOKEN=falseなので空でOK
+
+// デバッグ用：実際に使われているURLを確認
+console.log('BASE_API:', BASE_API);
+console.log('JOB_API:', JOB_API);
 
 // クエリパラメータを安全に追加するユーティリティ
 function withParams(base, obj){
