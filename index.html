@@ -349,8 +349,20 @@ function buildApiUrl(base, defaultQuery) {
   }
 
   const raw = payload.data;
+  // デバッグ用：実際のデータ構造を確認
+  console.log('Raw data:', raw);
+  console.log('Is array:', Array.isArray(raw));
+  if (Array.isArray(raw)) {
+    console.log('Tier2 rows:', raw.filter(r => r.tier === 'tier2'));
+    console.log('Tier2 normalized_100 rows:', raw.filter(r => r.tier === 'tier2' && r.metric === 'normalized_100'));
+  }
+  
   // フラット(scores_flat) or ネスト(scores) をユニファイ
   const model = Array.isArray(raw) ? fromFlat(raw) : fromNested(raw);
+  
+  // デバッグ用：正規化後のデータを確認
+  console.log('Normalized model:', model);
+  console.log('Tier2 in model:', model.tier2);
 
   /** =============================
    *  Render Header (Site Type)
