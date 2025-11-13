@@ -273,8 +273,8 @@ document.getElementById('historySelect').addEventListener('change', (e)=>{
   }
 });
 
-// ページ読み込み時に履歴を読み込む
-loadHistory();
+// ページ読み込み時に履歴を読み込む（buildApiUrl定義後に実行）
+// loadHistory()は後で実行される（buildApiUrl定義後）
 </script>
   <div id="meta" class="card">Loading…</div>
   <div class="wrap">
@@ -442,7 +442,13 @@ function buildApiUrl(base, defaultQuery) {
       }
     });
   } else {
-    ctx.canvas.parentElement.innerHTML = '<div>Tier2データがありません</div>';
+    // canvasの親要素が存在する場合のみ更新
+    const canvasParent = ctx.canvas.parentElement;
+    if (canvasParent) {
+      canvasParent.innerHTML = '<div>Tier2データがありません</div>';
+    } else {
+      console.warn('Tier2 canvas parent element not found');
+    }
   }
 
   /** =============================
@@ -452,15 +458,19 @@ function buildApiUrl(base, defaultQuery) {
   // 数値フォーマッタ：整数なら整数表示、小数なら小数1桁（将来の要望に備えて関数化）
   const fmt = v => Number.isFinite(v) ? (v % 1 === 0 ? String(v) : v.toFixed(1)) : '-';
   
-  if (t2.length > 0){
-    const sorted = [...t2].sort((a,b) => (b.normalized_100 || 0) - (a.normalized_100 || 0));
-    const top3 = sorted.slice(0, 3);
-    topDriversEl.innerHTML = top3.map(d => {
-      const val = fmt(d.normalized_100);
-      return `<li><strong>${escapeHtml(d.name)}</strong>: ${val}</li>`;
-    }).join('');
+  if (topDriversEl) {
+    if (t2.length > 0){
+      const sorted = [...t2].sort((a,b) => (b.normalized_100 || 0) - (a.normalized_100 || 0));
+      const top3 = sorted.slice(0, 3);
+      topDriversEl.innerHTML = top3.map(d => {
+        const val = fmt(d.normalized_100);
+        return `<li><strong>${escapeHtml(d.name)}</strong>: ${val}</li>`;
+      }).join('');
+    } else {
+      topDriversEl.innerHTML = '<li>データがありません</li>';
+    }
   } else {
-    topDriversEl.innerHTML = '<li>データがありません</li>';
+    console.warn('topDrivers element not found');
   }
 
   /** =============================
@@ -595,6 +605,9 @@ function buildApiUrl(base, defaultQuery) {
     }
   }
 })();
+
+// ページ読み込み時に履歴を読み込む（buildApiUrl定義後に実行）
+loadHistory();
 </script>
 </body>
 </html>
