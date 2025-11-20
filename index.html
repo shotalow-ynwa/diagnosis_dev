@@ -23,6 +23,23 @@
     .top-drivers{list-style:none;padding:0;margin:8px 0}
     .top-drivers li{padding:4px 0;border-bottom:1px solid #eee}
     .top-drivers li:last-child{border-bottom:none}
+    .tier3-section{margin-top:24px}
+    .tier3-theme-group{margin-bottom:32px}
+    .tier3-theme-header{font-size:1.1em;font-weight:600;margin-bottom:12px;padding-bottom:8px;border-bottom:2px solid #ddd}
+    .tier3-table{width:100%;border-collapse:collapse;margin-top:8px}
+    .tier3-table th{text-align:left;padding:8px 12px;background:#f5f5f5;border-bottom:2px solid #ddd;font-size:.9em;font-weight:600}
+    .tier3-table td{padding:10px 12px;border-bottom:1px solid #eee;font-size:.9em;vertical-align:top}
+    .tier3-table tr:hover{background:#fafafa}
+    .tier3-badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:.8em;font-weight:500;margin-right:4px}
+    .tier3-badge.warmth{background:#ffebee;color:#c62828}
+    .tier3-badge.competence{background:#e3f2fd;color:#1565c0}
+    .tier3-badge.momentum{background:#f1f8e9;color:#558b2f}
+    .tier3-score{font-weight:600;color:#333}
+    .tier3-reason{color:#555;line-height:1.5}
+    .tier3-evidence{color:#666;font-size:.85em;line-height:1.4}
+    .tier3-evidence ul{margin:4px 0;padding-left:20px}
+    .tier3-evidence li{margin:2px 0}
+    .tier3-empty{color:#999;font-style:italic}
   </style>
 </head>
 <body>
@@ -121,6 +138,7 @@ async function enqueueJob(urlValue, engine){
 }
 
 // 2) /status を5秒間隔で監視（0/25/50/75/100）→ 100で即座に run_id で再読込
+// TODO: runIdFromServerは将来の拡張用に予約（現時点では未使用）
 async function startPolling(jobId, runIdFromServer){
   const MAX_TRIES = 18; // 90秒（5秒×18）
   const pollMsg = document.getElementById('runMsg');
@@ -287,6 +305,10 @@ document.getElementById('historySelect').addEventListener('change', (e)=>{
         <ul id="topDrivers" class="top-drivers"></ul>
       </div>
     </div>
+  </div>
+  <div class="card tier3-section">
+    <h2>詳細診断（Tier3指標）</h2>
+    <div id="tier3Detail"></div>
   </div>
 
 <script>
@@ -474,8 +496,187 @@ function buildApiUrl(base, defaultQuery) {
   }
 
   /** =============================
+   *  Tier3詳細診断の描画
+   *  ============================= */
+  try {
+    await renderTier3Detail(model);
+  } catch (e) {
+    console.warn('Tier3 detail render error:', e);
+    const tier3El = document.getElementById('tier3Detail');
+    if (tier3El) {
+      tier3El.innerHTML = '<div class="tier3-empty">Tier3データの読み込みに失敗しました</div>';
+    }
+  }
+
+  /** =============================
    *  Helpers
    *  ============================= */
+  async function renderTier3Detail(model) {
+    const tier3El = document.getElementById('tier3Detail');
+    if (!tier3El) return;
+
+    // Tier3データを取得
+    let tier3Data = [];
+    try {
+      // まず tier3_explained.json を試す
+      const runId = model.run_id;
+      if (runId) {
+        const tier3ApiUrl = withParams(BASE_API, { tier3_explained: 1, run_id: runId });
+        const tier3Resp = await fetch(tier3ApiUrl);
+        if (tier3Resp.ok) {
+          const tier3Payload = await tier3Resp.json();
+          if (tier3Payload.ok && tier3Payload.data && Array.isArray(tier3Payload.data.tier3)) {
+            tier3Data = tier3Payload.data.tier3;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('tier3_explained.json fetch failed, trying fallback:', e);
+    }
+
+    // フォールバック: 既存のAPIからTier3データを取得
+    if (tier3Data.length === 0) {
+      try {
+        const raw = payload.data;
+        if (Array.isArray(raw)) {
+          tier3Data = raw
+            .filter(r => r.tier === 'tier3')
+            .map(r => ({
+              id: r.id || '',
+              name_ja: r.name || '',
+              theme: r.theme || '',
+              score: r.value || null,
+              tier1_weights: extractTier1Weights(r, model),
+              reason: r.reason || '',
+              evidence: Array.isArray(r.evidence) ? r.evidence : []
+            }));
+        }
+      } catch (e) {
+        console.warn('Fallback tier3 fetch failed:', e);
+      }
+    }
+
+    // Tier2（theme）ごとにグルーピング
+    const grouped = groupTier3ByTheme(tier3Data);
+
+    // 描画
+    if (Object.keys(grouped).length === 0) {
+      tier3El.innerHTML = '<div class="tier3-empty">Tier3データがありません</div>';
+      return;
+    }
+
+    let html = '';
+    for (const [theme, items] of Object.entries(grouped)) {
+      html += `<div class="tier3-theme-group">`;
+      html += `<div class="tier3-theme-header">${escapeHtml(theme)}</div>`;
+      html += `<table class="tier3-table">`;
+      html += `<thead><tr><th>指標名</th><th>スコア</th><th>寄与軸</th><th>理由</th><th>根拠</th></tr></thead>`;
+      html += `<tbody>`;
+      
+      for (const item of items) {
+        // スコア: Tier3は1-5スケール（将来0-100に変更する可能性あり）
+        const score = item.score !== null && item.score !== undefined ? item.score : '-';
+        
+        // reason: セキュリティのため必ずescape（未設定時のみHTML）
+        const reasonHtml = item.reason
+          ? escapeHtml(item.reason)
+          : '<span class="tier3-empty">未設定</span>';
+        
+        // evidence: string配列またはオブジェクト配列の両方に対応（将来拡張対応）
+        const evidenceList = Array.isArray(item.evidence) ? item.evidence : [];
+        const evidence = evidenceList.length > 0
+          ? `<ul>${evidenceList.map(ev => {
+              const text = typeof ev === 'string' ? ev : (ev.text || '');
+              return `<li>${escapeHtml(text)}</li>`;
+            }).join('')}</ul>`
+          : '<span class="tier3-empty">未設定</span>';
+        
+        // 寄与軸バッジを生成
+        const badges = renderTier1Badges(item.tier1_weights);
+        
+        html += `<tr>`;
+        html += `<td>${escapeHtml(item.name_ja)}</td>`;
+        html += `<td><span class="tier3-score">${score}</span></td>`;
+        html += `<td>${badges}</td>`;
+        html += `<td class="tier3-reason">${reasonHtml}</td>`;
+        html += `<td class="tier3-evidence">${evidence}</td>`;
+        html += `</tr>`;
+      }
+      
+      html += `</tbody></table>`;
+      html += `</div>`;
+    }
+
+    tier3El.innerHTML = html;
+  }
+
+  function groupTier3ByTheme(tier3Data) {
+    const grouped = {};
+    for (const item of tier3Data) {
+      const theme = item.theme || '未分類';
+      if (!grouped[theme]) {
+        grouped[theme] = [];
+      }
+      grouped[theme].push(item);
+    }
+    // 各テーマ内でスコアの降順でソート
+    for (const theme in grouped) {
+      grouped[theme].sort((a, b) => {
+        const scoreA = a.score !== null && a.score !== undefined ? a.score : -1;
+        const scoreB = b.score !== null && b.score !== undefined ? b.score : -1;
+        return scoreB - scoreA;
+      });
+    }
+    return grouped;
+  }
+
+  function extractTier1Weights(tier3Row, model) {
+    // tier3Rowからtier1_weightsを抽出、なければthemeから推測
+    if (tier3Row.tier1_weights && typeof tier3Row.tier1_weights === 'object') {
+      return tier3Row.tier1_weights;
+    }
+    
+    // themeからTier2を特定し、Tier2のtier1_mappingから推測
+    // TODO: 将来的には tier2_id や theme_id などの機械可読なIDで紐付けに変更予定
+    // 現時点では theme（Tier2のname）との完全一致でマッチング
+    const theme = tier3Row.theme || '';
+    if (!theme) return { Warmth: 0, Competence: 0, Momentum: 0 };
+    
+    // model.tier2から該当するTier2を探す
+    const tier2 = (model.tier2 || []).find(t2 => t2.name === theme);
+    if (tier2 && tier2.tier1_weights) {
+      return tier2.tier1_weights;
+    }
+    
+    // デフォルト: すべて0
+    return { Warmth: 0, Competence: 0, Momentum: 0 };
+  }
+
+  function renderTier1Badges(tier1Weights) {
+    if (!tier1Weights || typeof tier1Weights !== 'object') {
+      return '<span class="tier3-empty">-</span>';
+    }
+    
+    // バックエンドの実データ仕様に合わせて、大文字始まりと小文字の両方に対応
+    // TODO: スキーマ確定後は片方に統一してこのフォールバックを削除
+    const w = tier1Weights.Warmth ?? tier1Weights.warmth ?? 0;
+    const c = tier1Weights.Competence ?? tier1Weights.competence ?? 0;
+    const m = tier1Weights.Momentum ?? tier1Weights.momentum ?? 0;
+    
+    const badges = [];
+    if (w > 0) {
+      badges.push(`<span class="tier3-badge warmth">W</span>`);
+    }
+    if (c > 0) {
+      badges.push(`<span class="tier3-badge competence">C</span>`);
+    }
+    if (m > 0) {
+      badges.push(`<span class="tier3-badge momentum">M</span>`);
+    }
+    
+    return badges.length > 0 ? badges.join('') : '<span class="tier3-empty">-</span>';
+  }
+
   function fromFlat(rows) {
     // 代表メタ
     const meta = rows[0] || {};
